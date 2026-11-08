@@ -1,8 +1,10 @@
 package org.firstinspires.ftc.teamcode;
 
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 
+@Disabled // Remove only after route, rules and mechanism validation.
 @Autonomous(
     name = "BIOBUZZ Blue Right Autonomous",
     group = "Autonomous"
@@ -10,7 +12,10 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 public class BioBuzzAutonomous extends LinearOpMode {
 
     public BioBuzzRobot robot;
+    public static boolean ROUTE_CALIBRATED = false;
 
+    // Unverified pickup positions: each row below is ONE expected ball.
+    // An empty robot is required; no sensor confirms intake or discharge.
     // CAD uses meters.
     public static final double INCHES_PER_METER = 39.37007874;
 
@@ -30,10 +35,19 @@ public class BioBuzzAutonomous extends LinearOpMode {
     // positions, NOT exact game-piece centers.
 
     public static double[][] COLLECTION_ROUTE_M = {
-        {1.20, -1.00},  // Approach corridor
-        {1.20, -0.30},  // Move along blue side
-        {1.48,  0.00}   // Approach blue NECTAR staging
+        {1.20, -1.00},  // Proposed pickup 1: measure actual ball position
+        {1.20, -0.30},  // Proposed pickup 2: measure actual ball position
+        {1.48,  0.00}   // Proposed pickup 3: measure actual ball position
     };
+
+    // Navigation ONLY: these two waypoints must not increment inventory.
+    public static double[][] FINAL_APPROACH_M = {
+        {1.20, -0.30},
+        {1.48, 0.00}
+    };
+    // Proposed final pickup, not a CAD-confirmed ball position.
+    public static double FINAL_BALL_X_M = 1.48;
+    public static double FINAL_BALL_Z_M = 0.30;
 
     // Proposed shooting location, not an official
     // shooting coordinate.
@@ -58,6 +72,7 @@ public class BioBuzzAutonomous extends LinearOpMode {
         double[][] route,
         String stage
     ) {
+        robot.stopMechanisms();
         for (int i = 0; i < route.length; i++) {
             if (!opModeIsActive()) return false;
 
@@ -76,85 +91,47 @@ public class BioBuzzAutonomous extends LinearOpMode {
         return true;
     }
 
+    private boolean shootAtGoal() {
+        if (!followRoute(SHOOT_ROUTE_M, "Shooting position")) return false;
+        if (!robot.facePoint(inches(GOAL_X_M), inches(GOAL_Z_M))) return false;
+        return robot.shootExpectedBalls();
+    }
+
+    // Package-visible for the hardware-free regression check.
+    boolean runSequence() {
+        if (COLLECTION_ROUTE_M.length != 3) return false;
+        for (double[] pickup : COLLECTION_ROUTE_M) {
+            if (!robot.collectOneAt(inches(pickup[0]), inches(pickup[1]))) return false;
+        }
+        if (!shootAtGoal()) return false;
+        // Restore the calibrated collection heading after aiming at the HIVE.
+        if (!robot.faceHeading(START_HEADING)) return false;
+        if (!followRoute(FINAL_APPROACH_M, "Final ball approach (no collection)")) return false;
+        if (!robot.collectOneAt(inches(FINAL_BALL_X_M), inches(FINAL_BALL_Z_M))) return false;
+        return shootAtGoal();
+    }
+
     @Override
     public void runOpMode() {
-
         robot = new BioBuzzRobot(this);
-        robot.init(hardwareMap);
-
-        // ===== ADJUSTABLE MOTOR STRENGTH =====
-        robot.leftFrontStrength = 1.0;
-        robot.leftBackStrength = 1.0;
-        robot.rightBackStrength = 1.0;
-        robot.rightFrontStrength = 1.0;
-
-        // ===== ADJUSTABLE MOTOR POWER =====
-        robot.drivePower = 0.45;
-        robot.strafePower = 0.35;
-        robot.turnPower = 0.30;
-
-        // ===== HARDWARE CALIBRATION =====
-        // Example motor specifications.
-        robot.ticksPerRev = 537.7;
-        robot.wheelDiameterIn = 4.0;
-        robot.gearRatio = 1.0;
-
-        robot.strafeCorrection = 1.15;
-        robot.turnCorrection = 1.0;
-        robot.turnRadiusIn = 14.0;
-
-        // ===== SET INITIAL POSITION =====
-        robot.setPose(
-            inches(START_X_M),
-            inches(START_Z_M),
-            START_HEADING
-        );
-
-        telemetry.addLine("BIOBUZZ BLUE RIGHT");
-        telemetry.addLine("Preset CAD-based route loaded");
-        telemetry.addLine("Drive motors only");
-        telemetry.addLine("Verify start pose and clearance");
-        telemetry.update();
-
-        waitForStart();
-
-        if (isStopRequested()) return;
-
         try {
-            // STEP 1: MOVE TO COLLECTION AREA
-            if (!followRoute(
-                    COLLECTION_ROUTE_M,
-                    "Blue Collection Approach")) {
-                return;
-            }
-
-            // No intake motor is configured.
-            // This only drives to the staging area.
-
-            // STEP 2: MOVE TO SHOOTING POSITION
-            if (!followRoute(
-                    SHOOT_ROUTE_M,
-                    "Shooting Position")) {
-                return;
-            }
-
-            // STEP 3: FACE BLUE HIVE
-            if (!robot.facePoint(
-                    inches(GOAL_X_M),
-                    inches(GOAL_Z_M))) {
-                telemetry.addLine("Alignment failed");
+            robot.init(hardwareMap);
+            robot.setPose(inches(START_X_M), inches(START_Z_M), START_HEADING);
+            telemetry.addLine("BIOBUZZ BLUE RIGHT - calibration draft");
+            telemetry.addLine("Start EMPTY. Expected counts only; maximum planned capacity 4.");
+            telemetry.addLine("endFlip shooting disabled; route/rules unverified.");
+            telemetry.update();
+            waitForStart();
+            if (isStopRequested()) return;
+            if (!ROUTE_CALIBRATED) {
+                telemetry.addLine("Route disabled: measure pickup positions and clearances first.");
                 telemetry.update();
                 return;
             }
-
-            robot.stop();
-
-            telemetry.addLine("Autonomous route complete");
-            telemetry.addData("Estimated X (in)", robot.x);
-            telemetry.addData("Estimated Z (in)", robot.z);
-            telemetry.addData("Estimated heading", robot.heading);
+            boolean completed = runSequence();
+            telemetry.addData("Sequence", completed ? "Complete" : "Aborted / disabled");
+            telemetry.addData("Expected balls (NOT sensed)", robot.getEstimatedBalls());
             telemetry.update();
-
         } finally {
             robot.stop();
         }

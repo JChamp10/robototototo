@@ -9,6 +9,11 @@ public class BioBuzzRobot {
 
     public DcMotor leftFront, leftBack;
     public DcMotor rightBack, rightFront;
+    public DcMotor intake, endFlip;
+    public static final int MAX_BALLS = 4;
+    private int estimatedBalls;
+    public double intakePower = 0.55;
+    public long intakeSettleMs = 250;
 
     public double leftFrontStrength = 1.0;
     public double leftBackStrength = 1.0;
@@ -44,6 +49,13 @@ public class BioBuzzRobot {
         rightBack = map.get(DcMotor.class, "rightBack");
         rightFront = map.get(DcMotor.class, "rightFront");
 
+        intake = map.get(DcMotor.class, "intake");
+        intake.setPower(0);
+        intake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+        endFlip = map.get(DcMotor.class, "endFlip");
+        endFlip.setPower(0); // Unknown mechanism: never energize or reset its encoder.
+        estimatedBalls = 0; // Requires an EMPTY robot at start.
+
         // Verify directions with the actual drivetrain.
         leftFront.setDirection(DcMotor.Direction.REVERSE);
         leftBack.setDirection(DcMotor.Direction.REVERSE);
@@ -51,6 +63,7 @@ public class BioBuzzRobot {
         rightFront.setDirection(DcMotor.Direction.FORWARD);
 
         for (DcMotor motor : motors()) {
+            motor.setPower(0);
             motor.setZeroPowerBehavior(
                 DcMotor.ZeroPowerBehavior.BRAKE
             );
@@ -81,10 +94,60 @@ public class BioBuzzRobot {
             (Math.PI * wheelDiameterIn);
     }
 
-    public void stop() {
+    public void stopDrive() {
         for (DcMotor motor : motors()) {
-            motor.setPower(0);
+            if (motor != null) motor.setPower(0);
         }
+    }
+
+    public void stopMechanisms() {
+        if (intake != null) intake.setPower(0);
+        if (endFlip != null) endFlip.setPower(0);
+    }
+
+    public void stop() {
+        stopDrive();
+        stopMechanisms();
+    }
+
+    public int getEstimatedBalls() {
+        return estimatedBalls;
+    }
+
+    // One completed pickup pass = ONE expected ball, never sensor confirmation.
+    // A failed pass may still pick up a ball: abort the routine, do not retry.
+    public boolean collectOneAt(double targetX, double targetZ) {
+        if (!op.opModeIsActive() || estimatedBalls >= MAX_BALLS
+                || intakeSettleMs < 0 || intakeSettleMs > 2000
+                || !Double.isFinite(intakePower) || intakePower <= 0 || intakePower > 1) {
+            stopMechanisms();
+            return false;
+        }
+        try {
+            intake.setPower(intakePower);
+            if (!driveTo(targetX, targetZ)) return false;
+            ElapsedTime timer = new ElapsedTime();
+            while (op.opModeIsActive() && timer.milliseconds() < intakeSettleMs) {
+                op.idle();
+            }
+            if (!op.opModeIsActive()) return false;
+            estimatedBalls++;
+            op.telemetry.addData("Expected balls (NOT sensed)", estimatedBalls);
+            op.telemetry.update();
+            return true;
+        } finally {
+            stopMechanisms();
+        }
+    }
+
+    public boolean shootExpectedBalls() {
+        stop();
+        // Deliberately disabled. endFlip may be a flipper/catapult, not a flywheel.
+        // Replace with a measured, bounded, STOP-aware mechanism cycle.
+        // Only reduce estimatedBalls after successful discharge; on failure retain it.
+        op.telemetry.addLine("SHOOTING DISABLED: identify and calibrate endFlip");
+        op.telemetry.update();
+        return false; // Never claim a shot or continue collecting after this placeholder.
     }
 
     private double normalize(double angle) {
@@ -144,7 +207,7 @@ public class BioBuzzRobot {
                 op.idle();
             }
         } finally {
-            stop();
+            stopDrive();
             for (DcMotor motor : m) {
                 motor.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
             }
@@ -176,7 +239,7 @@ public class BioBuzzRobot {
         );
 
         boolean ok = moveTicks(
-            ticks, -ticks, -ticks, ticks,
+            ticks, -ticks, ticks, -ticks,
             strafePower, 6.0
         );
 
